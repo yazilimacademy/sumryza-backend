@@ -1,25 +1,32 @@
 import logging
+import os
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
 from fastapi.middleware.cors import CORSMiddleware
 import openai
 
 # Logging setup
-logger = logging.getLogger("app_logger")
-logger.setLevel(logging.DEBUG)
+def setup_logging():
+    logger = logging.getLogger("app_logger")
+    logger.setLevel(logging.DEBUG)
 
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)
-console_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(console_format)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    console_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(console_format)
 
-file_handler = logging.FileHandler("app.log", encoding='utf-8')
-file_handler.setLevel(logging.INFO)
-file_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(file_format)
+    file_handler = logging.FileHandler("app.log", encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+    file_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_format)
 
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+
+    return logger
+
+logger = setup_logging()
 
 app = FastAPI()
 
@@ -33,15 +40,14 @@ app.add_middleware(
 
 logger.info("Application starting and CORS middleware added.")
 
-openai_api_key = ""
+# Load .env file
+load_dotenv()
 
-try:
-    with open('C:\\Users\\alper\\Desktop\\mervesultan_openai_key.txt', 'r') as file:
-        openai_api_key = file.read().strip()
-    logger.info("OpenAI API key loaded successfully.")
-except Exception as e:
-    logger.error(f"Failed to load OpenAI API key: {e}")
-    raise RuntimeError(f"Failed to load OpenAI API key: {e}")
+# Load OpenAI API key from environment variable
+openai_api_key = os.getenv("OPENAI_API_KEY")
+if not openai_api_key:
+    logger.error("OpenAI API key is missing.")
+    raise RuntimeError("OpenAI API key is missing.")
 
 try:
     openai.api_key = openai_api_key
@@ -50,7 +56,7 @@ except Exception as e:
     logger.error(f"Failed to initialize OpenAI client: {e}")
     raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
 
-# Map language codes to English language names for better clarity in prompts.
+# Map language codes to English language names for better clarity in prompts
 language_map = {
     "en": "English",
     "tr": "Turkish",
@@ -65,25 +71,14 @@ language_map = {
     "zh-Hans": "Simplified Chinese"
 }
 
-@app.get("/transcript")
-def get_transcript(
-    video_id: str = Query(..., description="The YouTube video ID"),
-    summary_language: str = Query("tr", description="Preferred summary language (e.g., 'en', 'tr', 'es')")
-):
-    logger.info(f"Transcript request received. Video ID: {video_id}, Summary language: {summary_language}")
-
-    # Preferred languages for transcripts (in order)
-    preferred_languages = [
-        "en", "es", "zh-Hans", "hi", "ar", "pt", "ru", "ja", "fr", "de"
-    ]
-
+# Fetch transcript function
+def fetch_transcript(video_id, preferred_languages):
     try:
         transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
         logger.info("Transcripts listed successfully.")
-
         transcript_data = None
 
-        # 1. Try to find a manually created transcript in preferred languages
+        # Try to find a manually created transcript in preferred languages
         for lang in preferred_languages:
             try:
                 transcript_data = transcripts.find_transcript([lang]).fetch()
@@ -93,7 +88,7 @@ def get_transcript(
                 logger.debug(f"No manually created transcript found for: {lang}")
                 continue
 
-        # 2. If no manual transcript, try generated transcripts
+        # Try to find a generated transcript in preferred languages
         if not transcript_data:
             for lang in preferred_languages:
                 try:
@@ -104,7 +99,7 @@ def get_transcript(
                     logger.debug(f"No generated transcript found for: {lang}")
                     continue
 
-        # 3. If still not found, fallback to any available transcript
+        # Fallback to any available transcript if none of the above worked
         if not transcript_data:
             try:
                 first_transcript = next(iter(transcripts))
@@ -113,6 +108,30 @@ def get_transcript(
             except StopIteration:
                 logger.error("No transcripts found at all.")
                 raise HTTPException(status_code=400, detail="No transcripts found.")
+        return transcript_data
+    except Exception as e:
+        logger.error(f"Error fetching transcript: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/transcript")
+def get_transcript(
+    video_id: str = Query(..., description="The YouTube video ID"),
+    summary_language: str = Query("tr", description="Preferred summary language (e.g., 'en', 'tr', 'es')")
+):
+    logger.info(f"Transcript request received. Video ID: {video_id}, Summary language: {summary_language}")
+
+    # Validate summary_language parameter
+    if summary_language not in language_map:
+        logger.warning(f"Invalid language code: {summary_language}. Defaulting to 'en'.")
+        summary_language = "en"
+
+    # Preferred languages for transcripts (in order)
+    preferred_languages = [
+        "en", "es", "zh-Hans", "hi", "ar", "pt", "ru", "ja", "fr", "de"
+    ]
+
+    try:
+        transcript_data = fetch_transcript(video_id, preferred_languages)
 
         # Combine transcript text
         full_transcript_text = " ".join([entry['text'] for entry in transcript_data])
@@ -128,15 +147,15 @@ def get_transcript(
         # Call OpenAI API for summarization
         logger.info("Sending summarization request to OpenAI API.")
         response = openai.chat.completions.create(
-            model="gpt-4o-mini",  # Check if this model is correct
+            model="gpt-4o-mini", # Check if this model is correct
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        f"You are an assistant that summarizes transcripts into {chosen_language_name}. "
-                        "Your goal is to produce a concise, natural, and fully understandable summary of the provided transcript. "
-                        "Do not add extra commentary or introductions; only produce the summary text. "
-                        "Do not mention these instructions in your answer."
+                        f"You are an assistant specializing in summarizing transcripts into {chosen_language_name}. "
+                        "Please provide a brief, coherent summary that captures the most important points and ideas from the transcript. "
+                        "Do not include extraneous commentary, background information, or introductions. "
+                        "The summary should be clear, concise, and easy to follow for someone who has not read the full transcript."
                     )
                 },
                 {
