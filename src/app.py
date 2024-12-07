@@ -5,6 +5,9 @@ from fastapi import FastAPI, HTTPException, Query
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
 from fastapi.middleware.cors import CORSMiddleware
 import openai
+from ollama import chat
+from ollama import ChatResponse
+from data.prompts import get_summary_prompt, get_key_points_prompt
 
 # Logging setup
 def setup_logging():
@@ -40,21 +43,21 @@ app.add_middleware(
 
 logger.info("Application starting and CORS middleware added.")
 
-# Load .env file
-load_dotenv()
+# # Load .env file
+# load_dotenv()
 
-# Load OpenAI API key from environment variable
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    logger.error("OpenAI API key is missing.")
-    raise RuntimeError("OpenAI API key is missing.")
+# # Load OpenAI API key from environment variable
+# openai_api_key = os.getenv("OPENAI_API_KEY")
+# if not openai_api_key:
+#     logger.error("OpenAI API key is missing.")
+#     raise RuntimeError("OpenAI API key is missing.")
 
-try:
-    openai.api_key = openai_api_key
-    logger.info("OpenAI client initialized successfully.")
-except Exception as e:
-    logger.error(f"Failed to initialize OpenAI client: {e}")
-    raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
+# try:
+#     openai.api_key = openai_api_key
+#     logger.info("OpenAI client initialized successfully.")
+# except Exception as e:
+#     logger.error(f"Failed to initialize OpenAI client: {e}")
+#     raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
 
 # Map language codes to English language names for better clarity in prompts
 language_map = {
@@ -120,56 +123,39 @@ def get_transcript(
 ):
     logger.info(f"Transcript request received. Video ID: {video_id}, Summary language: {summary_language}")
 
-    # Validate summary_language parameter
     if summary_language not in language_map:
         logger.warning(f"Invalid language code: {summary_language}. Defaulting to 'en'.")
         summary_language = "en"
 
-    # Preferred languages for transcripts (in order)
     preferred_languages = [
         "en", "es", "zh-Hans", "hi", "ar", "pt", "ru", "ja", "fr", "de"
     ]
 
     try:
         transcript_data = fetch_transcript(video_id, preferred_languages)
-
-        # Combine transcript text
         full_transcript_text = " ".join([entry['text'] for entry in transcript_data])
         logger.info("Transcript text combined successfully.")
 
-        # Determine the target language name from the map, defaulting to English if not found
         chosen_language_name = language_map.get(summary_language, "English")
+        logger.info(f"Chosen language name: {chosen_language_name}")
 
-        # Create prompt for OpenAI
-        prompt = f"Please summarize the following transcript in {chosen_language_name}:\n\n{full_transcript_text}"
-        logger.info("Prompt created for OpenAI.")
+        prompt = f"Summarize the following transcript in {chosen_language_name}:\n\n{full_transcript_text}"
 
-        # Call OpenAI API for summarization
-        logger.info("Sending summarization request to OpenAI API.")
-        response = openai.chat.completions.create(
-            model="gpt-4o-mini", # Check if this model is correct
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        f"You are an assistant specializing in summarizing transcripts into {chosen_language_name}. "
-                        "Please provide a brief, coherent summary that captures the most important points and ideas from the transcript. "
-                        "Do not include extraneous commentary, background information, or introductions. "
-                        "The summary should be clear, concise, and easy to follow for someone who has not read the full transcript."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0.8,
-            max_tokens=3900,
-            top_p=1.0
-        )
-        logger.info("OpenAI API response received.")
+        messages = [
+            {
+                'role': 'system',
+                'content': get_summary_prompt(chosen_language_name)
+            },
+            {
+                'role': 'user',
+                'content': prompt
+            }
+        ]
 
-        summary = response.choices[0].message.content.strip()
+        logger.info("Sending summarization request to Ollama.")
+        response: ChatResponse = chat(model='mistral-small:latest', messages=messages)
+
+        summary = response.message.content.strip()
         logger.info("Summary successfully created.")
 
         return {"summary": summary}
