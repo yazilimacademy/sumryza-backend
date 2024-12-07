@@ -4,7 +4,6 @@ def get_summary_prompt(chosen_language_name: str) -> str:
         "Produce a concise, natural, and fully understandable summary of the provided transcript. "
         "Do not add any commentary, introductions, headings, bullet points, markdown, or any extra text. "
         "Do not say 'Here is the summary' or similar phrases. "
-        "Only return the summary itself as a single paragraph of plain text. "
         "Do not mention these requirements in your output."
     )
 

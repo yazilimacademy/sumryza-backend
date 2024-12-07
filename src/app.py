@@ -8,6 +8,15 @@ import openai
 from ollama import chat
 from ollama import ChatResponse
 from data.prompts import get_summary_prompt, get_key_points_prompt
+import anthropic
+
+
+api_key_path = "C:\\Users\\alper\\Desktop\\claude_api_key.txt"
+
+anthropic_api_key = ""
+
+with open(api_key_path, "r") as file:
+    anthropic_api_key = file.read().strip()
 
 # Logging setup
 def setup_logging():
@@ -139,24 +148,46 @@ def get_transcript(
         chosen_language_name = language_map.get(summary_language, "English")
         logger.info(f"Chosen language name: {chosen_language_name}")
 
+        client = anthropic.Anthropic(api_key=anthropic_api_key)
+
         prompt = f"Summarize the following transcript in {chosen_language_name}:\n\n{full_transcript_text}"
 
-        messages = [
-            {
-                'role': 'system',
-                'content': get_summary_prompt(chosen_language_name)
-            },
-            {
-                'role': 'user',
-                'content': prompt
-            }
-        ]
+        message = client.messages.create(
+            model="claude-3-5-haiku-20241022",
+            max_tokens=4000,
+            temperature=0.2,
+            system=get_summary_prompt(chosen_language_name),
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+        )
 
-        logger.info("Sending summarization request to Ollama.")
-        response: ChatResponse = chat(model='mistral-small:latest', messages=messages)
+        summary = message.content[0].text
 
-        summary = response.message.content.strip()
-        logger.info("Summary successfully created.")
+        # messages = [
+        #     {
+        #         'role': 'system',
+        #         'content': get_summary_prompt(chosen_language_name)
+        #     },
+        #     {
+        #         'role': 'user',
+        #         'content': prompt
+        #     }
+        # ]
+
+        # logger.info("Sending summarization request to Ollama.")
+        # response: ChatResponse = chat(model='mistral-small:latest', messages=messages)
+
+        # summary = response.message.content.strip()
+        # logger.info("Summary successfully created.")
 
         return {"summary": summary}
 
