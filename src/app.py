@@ -2,25 +2,22 @@ import logging
 from fastapi import FastAPI, HTTPException, Query
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound
 from fastapi.middleware.cors import CORSMiddleware
-import openai  # OpenAI kütüphanesi genellikle bu şekilde kullanılır
+import openai
 
-# Loglama yapılandırması
+# Logging setup
 logger = logging.getLogger("app_logger")
 logger.setLevel(logging.DEBUG)
 
-# Konsol için loglayıcı
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.DEBUG)
 console_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(console_format)
 
-# Dosya için loglayıcı
 file_handler = logging.FileHandler("app.log", encoding='utf-8')
 file_handler.setLevel(logging.INFO)
 file_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 file_handler.setFormatter(file_format)
 
-# Loglayıcıları ekleme
 logger.addHandler(console_handler)
 logger.addHandler(file_handler)
 
@@ -28,105 +25,118 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Üretimde, kendi alan adlarınızı belirtin
+    allow_origins=["*"],  # In production, specify your domains
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-logger.info("Uygulama başlatılıyor ve CORS middleware ekleniyor.")
+logger.info("Application starting and CORS middleware added.")
 
 openai_api_key = ""
 
 try:
     with open('C:\\Users\\alper\\Desktop\\mervesultan_openai_key.txt', 'r') as file:
         openai_api_key = file.read().strip()
-    logger.info("OpenAI API anahtarı başarıyla yüklendi.")
+    logger.info("OpenAI API key loaded successfully.")
 except Exception as e:
-    logger.error(f"OpenAI API anahtarı yüklenemedi: {e}")
-    raise RuntimeError(f"OpenAI API anahtarı yüklenemedi: {e}")
+    logger.error(f"Failed to load OpenAI API key: {e}")
+    raise RuntimeError(f"Failed to load OpenAI API key: {e}")
 
 try:
     openai.api_key = openai_api_key
-    logger.info("OpenAI client başarıyla başlatıldı.")
+    logger.info("OpenAI client initialized successfully.")
 except Exception as e:
-    logger.error(f"OpenAI client başlatılamadı: {e}")
-    raise RuntimeError(f"OpenAI client başlatılamadı: {e}")
+    logger.error(f"Failed to initialize OpenAI client: {e}")
+    raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
+
+# Map language codes to English language names for better clarity in prompts.
+language_map = {
+    "en": "English",
+    "tr": "Turkish",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "hi": "Hindi",
+    "ar": "Arabic",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "ja": "Japanese",
+    "zh-Hans": "Simplified Chinese"
+}
 
 @app.get("/transcript")
-def get_transcript(video_id: str = Query(..., description="YouTube video ID'si")):
-    logger.info(f"Transkript isteği alındı. Video ID: {video_id}")
+def get_transcript(
+    video_id: str = Query(..., description="The YouTube video ID"),
+    summary_language: str = Query("tr", description="Preferred summary language (e.g., 'en', 'tr', 'es')")
+):
+    logger.info(f"Transcript request received. Video ID: {video_id}, Summary language: {summary_language}")
 
+    # Preferred languages for transcripts (in order)
     preferred_languages = [
-        "en",       # İngilizce
-        "es",       # İspanyolca
-        "zh-Hans",  # Basitleştirilmiş Çince
-        "hi",       # Hintçe
-        "ar",       # Arapça
-        "pt",       # Portekizce
-        "ru",       # Rusça
-        "ja",       # Japonca
-        "fr",       # Fransızca
-        "de"        # Almanca
+        "en", "es", "zh-Hans", "hi", "ar", "pt", "ru", "ja", "fr", "de"
     ]
 
     try:
         transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
-        logger.info("Transkriptler başarıyla listelendi.")
+        logger.info("Transcripts listed successfully.")
 
         transcript_data = None
 
-        # 1. Tercih edilen dillerde manuel oluşturulmuş transkriptleri bulma
+        # 1. Try to find a manually created transcript in preferred languages
         for lang in preferred_languages:
             try:
                 transcript_data = transcripts.find_transcript([lang]).fetch()
-                logger.info(f"Manuel transkript bulundu: Dil = {lang}")
+                logger.info(f"Manually created transcript found: Language = {lang}")
                 break
             except NoTranscriptFound:
-                logger.debug(f"Manuel transkript bulunamadı: Dil = {lang}")
+                logger.debug(f"No manually created transcript found for: {lang}")
                 continue
 
-        # 2. Manuel transkript bulunamazsa, tercih edilen dillerde oluşturulmuş transkriptleri bulma
+        # 2. If no manual transcript, try generated transcripts
         if not transcript_data:
             for lang in preferred_languages:
                 try:
                     transcript_data = transcripts.find_generated_transcript([lang]).fetch()
-                    logger.info(f"Oluşturulmuş transkript bulundu: Dil = {lang}")
+                    logger.info(f"Generated transcript found: Language = {lang}")
                     break
                 except NoTranscriptFound:
-                    logger.debug(f"Oluşturulmuş transkript bulunamadı: Dil = {lang}")
+                    logger.debug(f"No generated transcript found for: {lang}")
                     continue
 
-        # 3. Hala transkript bulunamazsa, mevcut herhangi bir transkripti kullanma
+        # 3. If still not found, fallback to any available transcript
         if not transcript_data:
             try:
                 first_transcript = next(iter(transcripts))
                 transcript_data = first_transcript.fetch()
-                logger.info(f"Herhangi bir transkript bulundu: Dil = {first_transcript.language}")
+                logger.info(f"Any available transcript found: Language = {first_transcript.language}")
             except StopIteration:
-                logger.error("Hiçbir transkript bulunamadı.")
-                raise HTTPException(status_code=400, detail="Hiçbir transkript bulunamadı.")
+                logger.error("No transcripts found at all.")
+                raise HTTPException(status_code=400, detail="No transcripts found.")
 
-        # Transkript metnini birleştirme
+        # Combine transcript text
         full_transcript_text = " ".join([entry['text'] for entry in transcript_data])
-        logger.info("Transkript metni başarıyla birleştirildi.")
+        logger.info("Transcript text combined successfully.")
 
-        # OpenAI özeti için istem oluşturma
-        prompt = f"Lütfen aşağıdaki transkripti Türkçe olarak özetleyin:\n\n{full_transcript_text}"
-        logger.info("OpenAI özeti için istem oluşturuldu.")
+        # Determine the target language name from the map, defaulting to English if not found
+        chosen_language_name = language_map.get(summary_language, "English")
 
-        # OpenAI API çağrısı
-        logger.info("OpenAI API'sine özetleme isteği gönderiliyor.")
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",  # Model adını kontrol edin
+        # Create prompt for OpenAI
+        prompt = f"Please summarize the following transcript in {chosen_language_name}:\n\n{full_transcript_text}"
+        logger.info("Prompt created for OpenAI.")
+
+        # Call OpenAI API for summarization
+        logger.info("Sending summarization request to OpenAI API.")
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",  # Check if this model is correct
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "Sen, transkriptleri Türkçeye özetleyen yardımcı bir asistansın. "
-                        "Amacın, sağlanan transkriptin özlü, doğal ve tamamen anlaşılır bir özetini üretmektir. "
-                        "Ek yorum, açıklama veya giriş ekleme; yalnızca özet metnini üret. "
-                        "Bu talimatları cevabında belirtme."
+                        f"You are an assistant that summarizes transcripts into {chosen_language_name}. "
+                        "Your goal is to produce a concise, natural, and fully understandable summary of the provided transcript. "
+                        "Do not add extra commentary or introductions; only produce the summary text. "
+                        "Do not mention these instructions in your answer."
                     )
                 },
                 {
@@ -138,16 +148,16 @@ def get_transcript(video_id: str = Query(..., description="YouTube video ID'si")
             max_tokens=3900,
             top_p=1.0
         )
-        logger.info("OpenAI API yanıtı alındı.")
+        logger.info("OpenAI API response received.")
 
-        summary_in_turkish = response.choices[0].message.content.strip()
-        logger.info("Özet başarıyla oluşturuldu.")
+        summary = response.choices[0].message.content.strip()
+        logger.info("Summary successfully created.")
 
-        return {"summary_turkish": summary_in_turkish}
+        return {"summary": summary}
 
     except HTTPException as http_exc:
-        logger.error(f"HTTP hatası oluştu: {http_exc.detail}")
+        logger.error(f"HTTP error occurred: {http_exc.detail}")
         raise http_exc
     except Exception as e:
-        logger.error(f"Genel bir hata oluştu: {e}")
+        logger.error(f"General error occurred: {e}")
         raise HTTPException(status_code=400, detail=str(e))
