@@ -118,7 +118,7 @@ def get_transcript(video_id: str = Query(..., description="YouTube video ID'si")
         # OpenAI API çağrısı
         logger.info("OpenAI API'sine özetleme isteği gönderiliyor.")
         response = openai.ChatCompletion.create(
-            model="gpt-4",  # Model adını kontrol edin
+            model="gpt-4o-mini",  # Model adını kontrol edin
             messages=[
                 {
                     "role": "system",
@@ -135,7 +135,7 @@ def get_transcript(video_id: str = Query(..., description="YouTube video ID'si")
                 }
             ],
             temperature=0.8,
-            max_tokens=4000,
+            max_tokens=3900,
             top_p=1.0
         )
         logger.info("OpenAI API yanıtı alındı.")
